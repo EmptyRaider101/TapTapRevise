@@ -4,7 +4,6 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const Database = require('better-sqlite3');
-const open = require('open');
 
 const app = express();
 const port = 5002; // Backend on 5002
@@ -391,13 +390,20 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
 
+const openBrowser = async (url) => {
+  try {
+    const openPkg = await import('open');
+    const openFn = openPkg.default || openPkg;
+    await openFn(url);
+  } catch (err) {
+    console.error('Failed to open browser:', err);
+  }
+};
+
 app.listen(port, '0.0.0.0', async () => {
   console.log(`Server running at http://localhost:${port}`);
-  try {
-    await open(`http://localhost:${port}`);
-  } catch (e) {
-    console.error('Failed to open browser:', e);
-  }
+  const targetUrl = fs.existsSync(distPath) ? `http://localhost:${port}` : `http://localhost:5174`;
+  await openBrowser(targetUrl);
 }).on('error', (err) => {
   console.error('Server failed to start:', err);
 });
