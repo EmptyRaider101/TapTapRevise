@@ -22,3 +22,40 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Databases (SQLite db contains settings table with Gemini API key)
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+revision.db
+revision.db*
+
+# API keys, secrets, and environment variables
+.env
+.env.*
+*.key
+*.pem
+secrets.json
+config.local.json
+keys/
+
+# Uploads and User Data
+uploads/
+server/uploads/
+server/dist/
+Revisionoso/
+
+# Scratch and Temp files
+scratch/
+temp/
+tmp/
+
+# Build and Executable files
+*.exe
+*.dll
+*.so
+*.dylib
+TapTapRevise.exe
