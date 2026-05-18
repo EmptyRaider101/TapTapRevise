@@ -349,16 +349,30 @@ app.get('/api/check-updates', async (req, res) => {
     const response = await fetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
       headers: { 'User-Agent': 'TapTapRevise-App' }
     });
-    if (!response.ok) throw new Error('GitHub API failed');
+    if (!response.ok) {
+      if (response.status === 404) {
+        // No releases found yet for this repo
+        return res.json({
+          version: 'v0.0.1',
+          url: `https://github.com/${REPO}/releases`,
+          assets: []
+        });
+      }
+      throw new Error(`GitHub API failed with status ${response.status}`);
+    }
     const data = await response.json();
     res.json({
       version: data.tag_name,
       url: data.html_url,
-      assets: data.assets.map(a => ({ name: a.name, url: a.browser_download_url }))
+      assets: data.assets ? data.assets.map(a => ({ name: a.name, url: a.browser_download_url })) : []
     });
   } catch (e) {
-    console.error('Update check failed:', e);
-    res.status(500).json({ error: 'Failed to check for updates' });
+    console.error('Update check failed:', e.message || e);
+    res.json({
+      version: 'v0.0.1',
+      url: `https://github.com/${REPO}/releases`,
+      assets: []
+    });
   }
 });
 
