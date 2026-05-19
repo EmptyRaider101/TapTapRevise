@@ -9,7 +9,8 @@ const app = express();
 const port = 5002; // Backend on 5002
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ limit: '50mb', extended: true }));
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // Serve frontend dist if it exists
@@ -57,6 +58,31 @@ db.exec(`
     key TEXT PRIMARY KEY,
     value TEXT
   );
+  CREATE TABLE IF NOT EXISTS quizzes (
+    id TEXT PRIMARY KEY,
+    title TEXT,
+    questions TEXT,
+    createdAt INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS quiz_sessions (
+    quizId TEXT PRIMARY KEY,
+    currentQuestionIdx INTEGER,
+    answers TEXT,
+    isReviewing INTEGER,
+    scores TEXT,
+    updatedAt INTEGER
+  );
+  CREATE TABLE IF NOT EXISTS quiz_results (
+    id TEXT PRIMARY KEY,
+    quizId TEXT,
+    quizTitle TEXT,
+    answers TEXT,
+    scores TEXT,
+    totalQuestions INTEGER,
+    totalMarks INTEGER,
+    earnedMarks INTEGER,
+    completedAt INTEGER
+  );
 `);
 
 // Migration for revisedAt column if missing
@@ -88,21 +114,40 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
+const { PDFParse } = require('pdf-parse');
+
+async function extractText(filePath, mimeType) {
+  if (mimeType === 'application/pdf' || filePath.endsWith('.pdf')) {
+    try {
+      const dataBuffer = fs.readFileSync(filePath);
+      const parser = new PDFParse({ data: dataBuffer });
+      const data = await parser.getText();
+      return data.text || '';
+    } catch (err) {
+      console.error(`Failed to parse PDF ${filePath}:`, err);
+      return `Failed to parse PDF: ${err.message}`;
+    }
+  }
+  return `Extracted content mock for ${path.basename(filePath)}.`;
+}
+
 // Routes
-app.post('/api/upload', upload.array('files'), (req, res) => {
+app.post('/api/upload', upload.array('files'), async (req, res) => {
   const files = req.files;
   const paths = req.body.paths || [];
   const results = [];
 
   const insert = db.prepare('INSERT INTO files (id, name, type, size, status, content, filename, topic, module, uploadDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
 
-  files.forEach((file, index) => {
+  for (let index = 0; index < files.length; index++) {
+    const file = files[index];
     const id = Math.random().toString(36).substr(2, 9);
     const name = file.originalname;
     const type = file.mimetype;
     const size = file.size;
     const status = 'unread';
-    const content = `Extracted content mock for ${file.originalname}.`;
+    const filePath = path.join(uploadsDir, file.filename);
+    const content = await extractText(filePath, type);
     const filename = file.filename;
     
     // Parse module and topic from path if available
@@ -131,7 +176,7 @@ app.post('/api/upload', upload.array('files'), (req, res) => {
     const uploadDate = Date.now();
     insert.run(id, name, type, size, status, content, filename, topic, module, uploadDate);
     results.push({ id, name, type, size, status, content, url: `http://192.168.0.41:5002/uploads/${filename}`, topic, module, uploadDate });
-  });
+  }
 
   res.json(results);
 });
@@ -208,7 +253,7 @@ app.delete('/api/files', (req, res) => {
   }
 });
 
-app.post('/api/import-folder', (req, res) => {
+app.post('/api/import-folder', async (req, res) => {
   const { folderPath } = req.body;
   
   if (!fs.existsSync(folderPath)) {
@@ -218,7 +263,7 @@ app.post('/api/import-folder', (req, res) => {
   const results = [];
   const insert = db.prepare('INSERT INTO files (id, name, type, size, status, content, filename, topic, module, uploadDate) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
 
-  function processDir(dir) {
+  async function processDir(dir) {
     const items = fs.readdirSync(dir);
     const folderName = path.basename(dir);
     // Try to get module name from folder (e.g. "111 - Software Development" -> "Software Development")
@@ -230,19 +275,20 @@ app.post('/api/import-folder', (req, res) => {
       const stats = fs.statSync(fullPath);
 
       if (stats.isDirectory()) {
-        processDir(fullPath);
+        await processDir(fullPath);
       } else if (item.endsWith('.pdf') || item.endsWith('.pptx')) {
         const id = Math.random().toString(36).substr(2, 9);
         const name = item;
         const type = item.endsWith('.pdf') ? 'application/pdf' : 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
         const size = stats.size;
         const status = 'unread';
-        const content = `Extracted content mock for ${item}.`;
         
         // Copy file to uploads
         const filename = Date.now() + '-' + item;
         const destPath = path.join(__dirname, 'uploads', filename);
         fs.copyFileSync(fullPath, destPath);
+
+        const content = await extractText(destPath, type);
 
         // Parse filename for topic (e.g. "1. Course intro - Software Development.pdf")
         let topic = '';
@@ -260,8 +306,13 @@ app.post('/api/import-folder', (req, res) => {
     }
   }
 
-  processDir(folderPath);
-  res.json(results);
+  try {
+    await processDir(folderPath);
+    res.json(results);
+  } catch (err) {
+    console.error('Import failed:', err);
+    res.status(500).json({ error: 'Import failed' });
+  }
 });
 
 app.get('/api/notes', (req, res) => {
@@ -340,6 +391,97 @@ app.post('/api/settings', (req, res) => {
   res.sendStatus(200);
 });
 
+app.get('/api/quizzes', (req, res) => {
+  const quizzes = db.prepare('SELECT * FROM quizzes').all();
+  const results = quizzes.map(q => ({
+    ...q,
+    questions: JSON.parse(q.questions || '[]')
+  }));
+  res.json(results);
+});
+
+app.post('/api/quizzes', (req, res) => {
+  const { id, title, questions } = req.body;
+  db.prepare('INSERT INTO quizzes (id, title, questions, createdAt) VALUES (?, ?, ?, ?)').run(id, title, JSON.stringify(questions), Date.now());
+  res.sendStatus(200);
+});
+
+app.get('/api/quiz-sessions', (req, res) => {
+  const sessions = db.prepare('SELECT * FROM quiz_sessions').all();
+  const results = sessions.map(s => ({
+    quizId: s.quizId,
+    currentQuestionIdx: s.currentQuestionIdx,
+    answers: JSON.parse(s.answers || '{}'),
+    isReviewing: !!s.isReviewing,
+    scores: JSON.parse(s.scores || '{}'),
+    updatedAt: Number(s.updatedAt)
+  }));
+  res.json(results);
+});
+
+app.post('/api/quiz-sessions', (req, res) => {
+  const { quizId, currentQuestionIdx, answers, isReviewing, scores } = req.body;
+  db.prepare(`
+    INSERT INTO quiz_sessions (quizId, currentQuestionIdx, answers, isReviewing, scores, updatedAt)
+    VALUES (?, ?, ?, ?, ?, ?)
+    ON CONFLICT(quizId) DO UPDATE SET
+      currentQuestionIdx = excluded.currentQuestionIdx,
+      answers = excluded.answers,
+      isReviewing = excluded.isReviewing,
+      scores = excluded.scores,
+      updatedAt = excluded.updatedAt
+  `).run(
+    quizId,
+    currentQuestionIdx,
+    JSON.stringify(answers || {}),
+    isReviewing ? 1 : 0,
+    JSON.stringify(scores || {}),
+    Date.now()
+  );
+  res.sendStatus(200);
+});
+
+app.delete('/api/quiz-sessions/:quizId', (req, res) => {
+  const { quizId } = req.params;
+  db.prepare('DELETE FROM quiz_sessions WHERE quizId = ?').run(quizId);
+  res.sendStatus(200);
+});
+
+app.get('/api/quiz-results', (req, res) => {
+  const results = db.prepare('SELECT * FROM quiz_results ORDER BY completedAt DESC').all();
+  const parsed = results.map(r => ({
+    id: r.id,
+    quizId: r.quizId,
+    quizTitle: r.quizTitle,
+    answers: JSON.parse(r.answers || '{}'),
+    scores: JSON.parse(r.scores || '{}'),
+    totalQuestions: r.totalQuestions,
+    totalMarks: r.totalMarks,
+    earnedMarks: r.earnedMarks,
+    completedAt: Number(r.completedAt)
+  }));
+  res.json(parsed);
+});
+
+app.post('/api/quiz-results', (req, res) => {
+  const { id, quizId, quizTitle, answers, scores, totalQuestions, totalMarks, earnedMarks } = req.body;
+  db.prepare(`
+    INSERT INTO quiz_results (id, quizId, quizTitle, answers, scores, totalQuestions, totalMarks, earnedMarks, completedAt)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(
+    id,
+    quizId,
+    quizTitle,
+    JSON.stringify(answers || {}),
+    JSON.stringify(scores || {}),
+    totalQuestions,
+    totalMarks,
+    earnedMarks,
+    Date.now()
+  );
+  res.sendStatus(200);
+});
+
 // Update Tracker & Auto-Update
 const REPO = 'EmptyRaider101/TapTapRevise';
 
@@ -402,6 +544,32 @@ const openBrowser = async (url) => {
 
 app.listen(port, '0.0.0.0', async () => {
   console.log(`Server running at http://localhost:${port}`);
+
+  // Migration of existing mock PDFs
+  try {
+    const mockPdfs = db.prepare("SELECT * FROM files WHERE name LIKE '%.pdf' AND content LIKE 'Extracted content mock%'").all();
+    if (mockPdfs.length > 0) {
+      console.log(`Found ${mockPdfs.length} PDF files with mock content. Extracting actual text...`);
+      const updateContent = db.prepare('UPDATE files SET content = ? WHERE id = ?');
+      for (const f of mockPdfs) {
+        const filePath = path.join(uploadsDir, f.filename);
+        if (fs.existsSync(filePath)) {
+          try {
+            const dataBuffer = fs.readFileSync(filePath);
+            const parser = new PDFParse({ data: dataBuffer });
+            const data = await parser.getText();
+            updateContent.run(data.text || '', f.id);
+            console.log(`Successfully extracted text for ${f.name}`);
+          } catch (e) {
+            console.error(`Failed to extract text for ${f.name}:`, e.message);
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.error("Failed to migrate existing mock PDFs:", e);
+  }
+
   const targetUrl = fs.existsSync(distPath) ? `http://localhost:${port}` : `http://localhost:5174`;
   await openBrowser(targetUrl);
 }).on('error', (err) => {
