@@ -8,11 +8,12 @@
     "vite": "vite",
     "server": "node server/index.js",
     "build": "tsc -b && vite build",
+    "build:server": "npm run build && node -e \"const fs = require('fs'); fs.rmSync('server/dist', { recursive: true, force: true }); fs.cpSync('dist', 'server/dist', { recursive: true });\"",
     "lint": "eslint .",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
     "preview": "vite preview",
-    "build:exe": "npm run build && xcopy /E /I /Y dist server\\dist && pkg server/index.js --target node18-win-x64 --output TapTapRevise.exe"
+    "build:exe": "npm run build:server && pkg server/index.js --target node18-win-x64 --output TapTapRevise.exe"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.8",

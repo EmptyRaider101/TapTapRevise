@@ -48,7 +48,80 @@ export function WindowFrame({ appWindow, children }: WindowFrameProps) {
   const width = appWindow.isFullscreen ? dimensions.width : parseValue(appWindow.bounds.width, dimensions.width)
   const height = appWindow.isFullscreen ? dimensions.height : parseValue(appWindow.bounds.height, dimensions.height)
 
-  if (!appWindow.isOpen) return null
+  const [animationState, setAnimationState] = React.useState<"closed" | "opening" | "open" | "closing">(
+    appWindow.isOpen ? "open" : "closed"
+  )
+  const [transformStyle, setTransformStyle] = React.useState<React.CSSProperties>({
+    transform: "scale(0.1)",
+    opacity: 0,
+    transformOrigin: "center center",
+  })
+  
+  const isFirstMount = React.useRef(true)
+
+  const getTransformTarget = React.useCallback(() => {
+    const dockIcon = document.getElementById(`dock-icon-${appWindow.type}`)
+    if (!dockIcon) {
+      return {
+        transform: "scale(0.1)",
+        opacity: 0,
+        transformOrigin: "center center",
+      }
+    }
+
+    const iconRect = dockIcon.getBoundingClientRect()
+    const windowLeft = x
+    const windowTop = y
+    const windowWidth = width
+    const windowHeight = height
+
+    const iconCenterX = iconRect.left + iconRect.width / 2
+    const iconCenterY = iconRect.top + iconRect.height / 2
+    const windowCenterX = windowLeft + windowWidth / 2
+    const windowCenterY = windowTop + windowHeight / 2
+
+    const translateX = iconCenterX - windowCenterX
+    const translateY = iconCenterY - windowCenterY
+
+    const scaleX = iconRect.width / windowWidth
+    const scaleY = iconRect.height / windowHeight
+
+    const skewX = Math.min(Math.max(translateX / 8, -40), 40)
+    return {
+      transform: `translate3d(${translateX}px, ${translateY}px, 0) scale(${scaleX * 0.05}, ${scaleY * 2.8}) skewX(${skewX}deg)`,
+      opacity: 0,
+      transformOrigin: "center center",
+    }
+  }, [appWindow.type, x, y, width, height])
+
+  React.useEffect(() => {
+    if (isFirstMount.current) {
+      isFirstMount.current = false
+      return
+    }
+
+    if (appWindow.isOpen) {
+      setTransformStyle(getTransformTarget())
+      setAnimationState("opening")
+      const raf1 = requestAnimationFrame(() => {
+        const raf2 = requestAnimationFrame(() => {
+          setAnimationState("open")
+        })
+        return () => cancelAnimationFrame(raf2)
+      })
+      return () => cancelAnimationFrame(raf1)
+    } else {
+      setTransformStyle(getTransformTarget())
+      setAnimationState("closing")
+      const timer = setTimeout(() => {
+        setAnimationState("closed")
+      }, 600)
+      return () => clearTimeout(timer)
+    }
+  }, [appWindow.isOpen, getTransformTarget])
+
+  const isClosed = animationState === "closed"
+  if (isClosed) return null
 
   return (
     <Rnd
@@ -64,8 +137,8 @@ export function WindowFrame({ appWindow, children }: WindowFrameProps) {
       minHeight={200}
       bounds="parent"
       dragHandleClassName="window-handle"
-      disableDragging={appWindow.isFullscreen}
-      enableResizing={appWindow.isFullscreen ? false : undefined}
+      disableDragging={appWindow.isFullscreen || animationState === "closing" || animationState === "opening"}
+      enableResizing={(appWindow.isFullscreen || animationState === "closing" || animationState === "opening") ? false : undefined}
       onDragStart={() => setIsDraggingOrResizing(true)}
       onDragStop={(_e, d) => {
         setIsDraggingOrResizing(false)
@@ -83,9 +156,6 @@ export function WindowFrame({ appWindow, children }: WindowFrameProps) {
       onClick={() => focusWindow(appWindow.id)}
       style={{ zIndex: appWindow.isFullscreen ? 9999 : appWindow.zIndex }}
       className={cn(
-        "shadow-2xl",
-        appWindow.isFullscreen ? "rounded-none" : "rounded-2xl",
-        appWindow.zIndex > 0 && !appWindow.isFullscreen ? "ring-1 shadow-primary/10 ring-primary/20" : "",
         isDraggingOrResizing ? "transition-none" : "transition-all duration-500 ease-in-out"
       )}
     >
@@ -95,10 +165,20 @@ export function WindowFrame({ appWindow, children }: WindowFrameProps) {
         We must NOT use width/height:100% — inline-block parents collapse height for % children.
       */}
       <div
-        style={{ width: "100%", height: "100%" }}
+        style={{
+          width: "100%",
+          height: "100%",
+          transform: animationState === "open"
+            ? "translate3d(0px, 0px, 0px) scale(1, 1)"
+            : transformStyle.transform,
+          opacity: animationState === "open" ? 1 : 0,
+          transformOrigin: transformStyle.transformOrigin || "center center",
+          transition: "transform 600ms cubic-bezier(0.25, 1, 0.2, 1), opacity 500ms cubic-bezier(0.25, 1, 0.2, 1), border-radius 600ms cubic-bezier(0.25, 1, 0.2, 1)",
+        }}
         className={cn(
-          "glassmorphism flex flex-col overflow-hidden bg-background shadow-2xl transition-all duration-500 ease-in-out",
-          appWindow.isFullscreen ? "rounded-none" : "rounded-2xl"
+          "glassmorphism flex flex-col overflow-hidden bg-background shadow-2xl",
+          appWindow.isFullscreen ? "rounded-none" : "rounded-2xl",
+          appWindow.zIndex > 0 && !appWindow.isFullscreen ? "ring-1 shadow-primary/10 ring-primary/20" : ""
         )}
       >
         {/* Title Bar */}
@@ -142,7 +222,9 @@ export function WindowFrame({ appWindow, children }: WindowFrameProps) {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    toggleFullscreenWindow(appWindow.id)
+                    if (!appWindow.isFullscreen) {
+                      toggleFullscreenWindow(appWindow.id)
+                    }
                   }}
                   className="group flex h-3 w-3 items-center justify-center rounded-full bg-green-500 hover:bg-green-600 focus:outline-none"
                 >
@@ -167,7 +249,9 @@ export function WindowFrame({ appWindow, children }: WindowFrameProps) {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
-                    toggleFullscreenWindow(appWindow.id)
+                    if (!appWindow.isFullscreen) {
+                      toggleFullscreenWindow(appWindow.id)
+                    }
                   }}
                   className="rounded p-1 hover:bg-muted focus:outline-none"
                 >

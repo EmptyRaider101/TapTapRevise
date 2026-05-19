@@ -203,10 +203,18 @@ export function Desktop() {
           {dockItems.map((item) => (
             <Button
               key={item.type}
+              id={`dock-icon-${item.type}`}
               variant="ghost"
               size="icon"
               className="group relative h-12 w-12 rounded-xl transition-all hover:scale-110 hover:bg-white/50 dark:hover:bg-white/10"
-              onClick={() => openWindow(item.type)}
+              onClick={() => {
+                const existing = windows.find((w) => w.type === item.type)
+                if (existing && existing.isOpen) {
+                  closeWindow(existing.id)
+                } else {
+                  openWindow(item.type)
+                }
+              }}
             >
               <item.icon className="h-6 w-6 text-slate-700 dark:text-slate-200" />
 
